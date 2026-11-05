@@ -143,6 +143,37 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
         Future.syncValue(null);
   }
 
+  // ──────────────────────────────────────────────────────────────
+  // 改动 1：新增 PiP 连续 seek 的待处理目标位置与步长
+  // 根因：SeekHandler 默认的 rewind()/fastForward() 以
+  // playbackState.value.position 为基准，而 seek 后缓冲期间该值
+  // 不会更新，导致连续点击的目标位置不变、无法累加。
+  // 这里用一个本地 _pendingSeek 记录连续 seek 的目标位置作为累加基准。
+  // ──────────────────────────────────────────────────────────────
+  Duration? _pendingSeek;
+  static const _pipSeekStep = Duration(seconds: 10);
+
+  Duration get _seekBase => _pendingSeek ?? playbackState.value.position;
+
+  // 改动 2：重写 rewind()/fastForward()，支持连续点击累加
+  @override
+  Future<void> rewind() {
+    final target = _seekBase - _pipSeekStep;
+    _pendingSeek = target.isNegative ? Duration.zero : target;
+    return seek(_pendingSeek!);
+  }
+
+  @override
+  Future<void> fastForward() {
+    var target = _seekBase + _pipSeekStep;
+    final duration = playbackState.value.duration;
+    if (duration != null && target > duration) {
+      target = duration;
+    }
+    _pendingSeek = target;
+    return seek(target);
+  }
+
   void setMediaItem(MediaItem newMediaItem) {
     if (!enableBackgroundPlay) return;
     // if (kDebugMode) {
@@ -164,6 +195,16 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
     required double speed,
     String? debugLabel,
   }) {
+    // ──────────────────────────────────────────────────────────
+    // 改动 3：真实播放位置追近待处理目标（2 秒容差）后清空
+    // _pendingSeek，避免后续正常播放时从旧目标漂移。
+    // 放在所有 return 之前，确保去重逻辑不会跳过清理。
+    // ──────────────────────────────────────────────────────────
+    if (_pendingSeek != null &&
+        (position - _pendingSeek!).abs() <= const Duration(seconds: 2)) {
+      _pendingSeek = null;
+    }
+
     if (!enableBackgroundPlay || _item.isEmpty) {
       return;
     }
@@ -374,6 +415,8 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
     _item.clear();
     _lastPos = null;
     _lastConfig = null;
+    // 改动 4：清理时同时清空 pending seek，避免串到下一个媒体
+    _pendingSeek = null;
     /**
      * if (playbackState.processingState == AudioProcessingState.idle &&
             previousState?.processingState != AudioProcessingState.idle) {
