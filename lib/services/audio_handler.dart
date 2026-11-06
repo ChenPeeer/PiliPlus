@@ -166,7 +166,7 @@ class VideoPlayerServiceHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> fastForward() {
     var target = _seekBase + _pipSeekStep;
-    final duration = playbackState.value.duration;
+    final duration = mediaItem.value?.duration;
     if (duration != null && target > duration) {
       target = duration;
     }
